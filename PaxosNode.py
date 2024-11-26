@@ -18,25 +18,27 @@ class PaxosNode:
         self.listen_port = listen_port
         self.lock = threading.Lock()
 
-        # Paxos State
         self.proposals = {}
         self.accepted_proposals = {}
         self.promised_id = None
         self.accepted_id = None
         self.accepted_value = None
 
-        # Message Queue for Delivery
         self.message_queue = PriorityQueue()
 
+        self._promise_count = {}
+        self._accept_count = {}
+        self._proposal_counter = 0
+
     def start(self):
-        listener_thread = threading.Thread(target=self._listen)
-        listener_thread.daemon = True
+        listener_thread = threading.Thread(target=self._listen, daemon=True)
         listener_thread.start()
         print(f"Paxos Node {self.node_id} listening on port {self.listen_port}")
 
     def propose(self, message: Dict):
         proposal_id = self._generate_proposal_id()
-        self.proposals[proposal_id] = message
+        with self.lock:
+            self.proposals[proposal_id] = message
         self._send_to_all(
             {"type": "prepare", "proposal_id": proposal_id, "node_id": self.node_id}
         )
@@ -45,7 +47,7 @@ class PaxosNode:
         proposal_id = data["proposal_id"]
 
         with self.lock:
-            if not self.promised_id or proposal_id > self.promised_id:
+            if self.promised_id is None or proposal_id > self.promised_id:
                 self.promised_id = proposal_id
                 response = {
                     "type": "promise",
@@ -60,8 +62,6 @@ class PaxosNode:
 
         with self.lock:
             if proposal_id in self.proposals:
-                if not hasattr(self, "_promise_count"):
-                    self._promise_count = {}
                 self._promise_count[proposal_id] = (
                     self._promise_count.get(proposal_id, 0) + 1
                 )
@@ -80,7 +80,7 @@ class PaxosNode:
         message = data["message"]
 
         with self.lock:
-            if not self.promised_id or proposal_id >= self.promised_id:
+            if self.promised_id is None or proposal_id >= self.promised_id:
                 self.accepted_id = proposal_id
                 self.accepted_value = message
                 response = {"type": "accepted", "proposal_id": proposal_id}
@@ -91,8 +91,6 @@ class PaxosNode:
 
         with self.lock:
             if proposal_id in self.proposals:
-                if not hasattr(self, "_accept_count"):
-                    self._accept_count = {}
                 self._accept_count[proposal_id] = (
                     self._accept_count.get(proposal_id, 0) + 1
                 )
@@ -110,25 +108,35 @@ class PaxosNode:
         return message
 
     def _listen(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.bind(("", self.listen_port))
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.bind(("", self.listen_port))
+            print(f"Node {self.node_id} is ready to receive messages.")
 
-        while True:
-            try:
-                data, address = sock.recvfrom(4096)
-                message = json.loads(data.decode())
+            while True:
+                try:
+                    data, address = sock.recvfrom(4096)
+                    message = json.loads(data.decode())
+                    self._dispatch_message(message, address)
+                except json.JSONDecodeError as e:
+                    print(f"Invalid JSON received by Node {self.node_id}: {e}")
+                except Exception as e:
+                    print(f"Error in Paxos node {self.node_id}: {e}")
 
-                if message["type"] == "prepare":
-                    self._handle_prepare(message, address)
-                elif message["type"] == "promise":
-                    self._handle_promise(message)
-                elif message["type"] == "accept":
-                    self._handle_accept(message, address)
-                elif message["type"] == "accepted":
-                    self._handle_accepted(message)
-
-            except Exception as e:
-                print(f"Error in Paxos node: {e}")
+    def _dispatch_message(self, message: Dict, address: Tuple[str, int]):
+        try:
+            handlers = {
+                "prepare": self._handle_prepare,
+                "promise": self._handle_promise,
+                "accept": self._handle_accept,
+                "accepted": self._handle_accepted,
+            }
+            handler = handlers.get(message["type"])
+            if handler:
+                handler(message, address)
+            else:
+                print(f"Unknown message type received: {message.get('type')}")
+        except Exception as e:
+            print(f"Error handling message {message} from {address}: {e}")
 
     def _send_to_all(self, message: Dict):
         for address in self.server_addresses:
@@ -136,14 +144,12 @@ class PaxosNode:
 
     def _send_message(self, address: Tuple[str, int], message: Dict):
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.sendto(json.dumps(message).encode(), (address[0], address[1]))
-        finally:
-            sock.close()
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.sendto(json.dumps(message).encode(), address)
+        except Exception as e:
+            print(f"Error sending message to {address}: {e}")
 
     def _generate_proposal_id(self) -> int:
         with self.lock:
-            if not hasattr(self, "_proposal_counter"):
-                self._proposal_counter = 0
             self._proposal_counter += 1
-            return self._proposal_counter
+            return (self._proposal_counter << 16) | self.node_id
