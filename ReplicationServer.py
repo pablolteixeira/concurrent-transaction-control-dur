@@ -101,9 +101,8 @@ class ReplicationServer:
     def _process_delivered_messages(self):
         while True:
             message = self.paxos_node.deliver()
-            if message:
-                if message["type"] == "commit":
-                    self._handle_commit(message)
+            if message and message["type"] == "commit":
+                self._handle_commit(message)
 
     def _handle_commit(self, data: Dict):
         transaction_id = data["transaction_id"]
