@@ -2,6 +2,7 @@ import socket
 import json
 import threading
 from typing import Dict, Tuple, List
+from PaxosNode import PaxosNode
 
 
 class KeyValueStore:
@@ -18,16 +19,28 @@ class KeyValueStore:
 
 class ReplicationServer:
 
-    def __init__(self, host: str, port: int):
-
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        node_id: int,
+        server_addresses: List[Tuple[str, int]],
+        paxos_port: int,
+    ):
         self.host = host
         self.port = port
         self.database = KeyValueStore()
         self.server_socket = None
         self.lock = threading.Lock()
+        self.pending_commits = {}
+        self.node_id = node_id
+        self.server_addresses = server_addresses
+        self.paxos_port = paxos_port
+        self.paxos_node = PaxosNode(node_id, server_addresses, paxos_port)
+        self.paxos_node.start()
+        threading.Thread(target=self._process_delivered_messages, daemon=True).start()
 
     def start(self):
-
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.bind((self.host, self.port))
         self.server_socket.listen(5)
@@ -38,31 +51,30 @@ class ReplicationServer:
             threading.Thread(target=self.handle_request, args=(client_socket,)).start()
 
     def handle_request(self, client_socket: socket.socket):
-
         try:
             request = client_socket.recv(4096).decode()
             data = json.loads(request)
 
-            response = None
             if data["type"] == "read":
                 response = self._handle_read(data)
-            elif data["type"] == "write":
-                response = self._handle_write(data)
+                client_socket.sendall(json.dumps(response).encode())
+                client_socket.close()
             elif data["type"] == "commit":
-                response = self._handle_commit(data)
+                transaction_id = data["transaction_id"]
+                # Store the client socket for later response
+                with self.lock:
+                    self.pending_commits[transaction_id] = client_socket
+                # Propose the commit request via Paxos
+                self.paxos_node.propose(data)
             elif data["type"] == "abort":
                 response = self._handle_abort(data)
-
-            if response:
                 client_socket.sendall(json.dumps(response).encode())
+                client_socket.close()
 
         except Exception as e:
             print(f"Error handling request: {e}")
-        finally:
-            client_socket.close()
 
     def _handle_read(self, data: Dict):
-
         key = data["item"]
         result = self.database.read(key)
         if result:
@@ -70,23 +82,36 @@ class ReplicationServer:
             return {"status": "success", "value": value, "version": version}
         return {"status": "error", "message": "Key not found"}
 
-    def _handle_write(self, data: Dict):
+    def _handle_abort(self, data: Dict):
+        return {"status": "aborted"}
 
-        return {"status": "success"}
+    def _process_delivered_messages(self):
+        while True:
+            message = self.paxos_node.deliver()
+            if message is not None:
+                if message["type"] == "commit":
+                    self._handle_commit(message)
 
     def _handle_commit(self, data: Dict):
-
+        transaction_id = data["transaction_id"]
         rs = data["rs"]
         ws = data["ws"]
 
-        if self.certify_transaction(rs, ws):
+        commit_status = self.certify_transaction(rs, ws)
+        if commit_status:
             self.apply_transaction(ws)
-            return {"status": "committed"}
-        return {"status": "aborted"}
+            response = {"status": "committed"}
+        else:
+            response = {"status": "aborted"}
 
-    def _handle_abort(self, data: Dict):
-
-        return {"status": "aborted"}
+        # Send the response back to the client
+        with self.lock:
+            client_socket = self.pending_commits.pop(transaction_id, None)
+        if client_socket:
+            try:
+                client_socket.sendall(json.dumps(response).encode())
+            finally:
+                client_socket.close()
 
     def certify_transaction(
         self, rs: List[Tuple[str, int]], ws: List[Tuple[str, any]]
@@ -99,7 +124,6 @@ class ReplicationServer:
         return True
 
     def apply_transaction(self, ws: List[Tuple[str, any]]):
-
         with self.lock:
             for key, value in ws:
                 current = self.database.read(key)
@@ -107,6 +131,5 @@ class ReplicationServer:
                 self.database.write(key, value, version)
 
     def stop(self):
-
         if self.server_socket:
             self.server_socket.close()
