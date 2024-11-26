@@ -1,24 +1,22 @@
 import socket
 import json
 import threading
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple, List, Optional
 from PaxosNode import PaxosNode
 
 
 class KeyValueStore:
-
     def __init__(self):
         self.store = {}
 
-    def read(self, key: str) -> Tuple:
-        return self.store.get(key, None)
+    def read(self, key: str) -> Optional[Tuple]:
+        return self.store.get(key)
 
     def write(self, key: str, value: any, version: int):
         self.store[key] = (value, version)
 
 
 class ReplicationServer:
-
     def __init__(
         self,
         host: str,
@@ -30,25 +28,33 @@ class ReplicationServer:
         self.host = host
         self.port = port
         self.database = KeyValueStore()
-        self.server_socket = None
         self.lock = threading.Lock()
         self.pending_commits = {}
         self.node_id = node_id
         self.server_addresses = server_addresses
         self.paxos_port = paxos_port
         self.paxos_node = PaxosNode(node_id, server_addresses, paxos_port)
+        self.server_socket = None
+
         self.paxos_node.start()
         threading.Thread(target=self._process_delivered_messages, daemon=True).start()
 
     def start(self):
-        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server_socket.bind((self.host, self.port))
-        self.server_socket.listen(5)
-        print(f"Replication Server listening on {self.host}:{self.port}")
+        try:
+            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server_socket.bind((self.host, self.port))
+            self.server_socket.listen(5)
+            print(f"Replication Server listening on {self.host}:{self.port}")
 
-        while True:
-            client_socket, address = self.server_socket.accept()
-            threading.Thread(target=self.handle_request, args=(client_socket,)).start()
+            while True:
+                client_socket, _ = self.server_socket.accept()
+                threading.Thread(
+                    target=self.handle_request, args=(client_socket,), daemon=True
+                ).start()
+        except Exception as e:
+            print(f"Error starting server: {e}")
+        finally:
+            self.stop()
 
     def handle_request(self, client_socket: socket.socket):
         try:
@@ -58,23 +64,24 @@ class ReplicationServer:
             if data["type"] == "read":
                 response = self._handle_read(data)
                 client_socket.sendall(json.dumps(response).encode())
-                client_socket.close()
             elif data["type"] == "commit":
-                transaction_id = data["transaction_id"]
-                # Store the client socket for later response
-                with self.lock:
-                    self.pending_commits[transaction_id] = client_socket
-                # Propose the commit request via Paxos
-                self.paxos_node.propose(data)
+                self._handle_commit_request(data, client_socket)
             elif data["type"] == "abort":
                 response = self._handle_abort(data)
                 client_socket.sendall(json.dumps(response).encode())
-                client_socket.close()
-
+        except json.JSONDecodeError:
+            print("Received invalid JSON request")
+            client_socket.sendall(
+                json.dumps(
+                    {"status": "error", "message": "Invalid request format"}
+                ).encode()
+            )
         except Exception as e:
             print(f"Error handling request: {e}")
+        finally:
+            client_socket.close()
 
-    def _handle_read(self, data: Dict):
+    def _handle_read(self, data: Dict) -> Dict:
         key = data["item"]
         result = self.database.read(key)
         if result:
@@ -82,15 +89,21 @@ class ReplicationServer:
             return {"status": "success", "value": value, "version": version}
         return {"status": "error", "message": "Key not found"}
 
-    def _handle_abort(self, data: Dict):
+    def _handle_commit_request(self, data: Dict, client_socket: socket.socket):
+        transaction_id = data["transaction_id"]
+        with self.lock:
+            self.pending_commits[transaction_id] = client_socket
+        self.paxos_node.propose(data)
+
+    def _handle_abort(self, data: Dict) -> Dict:
         return {"status": "aborted"}
 
     def _process_delivered_messages(self):
         while True:
             message = self.paxos_node.deliver()
-            if message is not None:
+            if message:
                 if message["type"] == "commit":
-                    self._handle_commit(message)
+                    self._process_commit(message)
 
     def _handle_commit(self, data: Dict):
         transaction_id = data["transaction_id"]
@@ -110,6 +123,8 @@ class ReplicationServer:
         if client_socket:
             try:
                 client_socket.sendall(json.dumps(response).encode())
+            except Exception as e:
+                print(f"Error sending response to client: {e}")
             finally:
                 client_socket.close()
 
@@ -133,3 +148,5 @@ class ReplicationServer:
     def stop(self):
         if self.server_socket:
             self.server_socket.close()
+            self.server_socket = None
+            print("Replication Server stopped.")
