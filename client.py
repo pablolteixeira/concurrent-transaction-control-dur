@@ -10,8 +10,8 @@ class TransactionClient:
 
         self.server_addresses = server_addresses
         self.transaction_id = None
-        self.rs = []  # Read set: List of tuples (item, version).
-        self.ws = {}  # Write set: Dictionary of item -> value.
+        self.rs = []
+        self.ws = {}
         self.sockets = []
         self._connect_to_servers()
 
