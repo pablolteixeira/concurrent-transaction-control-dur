@@ -1,19 +1,9 @@
 import socket
 import json
 import threading
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, Tuple, List, Optional, Any
 from PaxosNode import PaxosNode
-
-
-class KeyValueStore:
-    def __init__(self):
-        self.store = {}
-
-    def read(self, key: str) -> Optional[Tuple]:
-        return self.store.get(key)
-
-    def write(self, key: str, value: any, version: int):
-        self.store[key] = (value, version)
+from KeyValueStore import KeyValueStore
 
 
 class ReplicationServer:
@@ -44,7 +34,9 @@ class ReplicationServer:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.bind((self.host, self.port))
             self.server_socket.listen(5)
-            print(f"Replication Server listening on {self.host}:{self.port}")
+            print(
+                f"Replication Server {self.node_id} escutando em {self.host}:{self.port}"
+            )
 
             while True:
                 client_socket, _ = self.server_socket.accept()
@@ -62,8 +54,10 @@ class ReplicationServer:
             data = json.loads(request)
 
             if data["type"] == "read":
-                response = self._handle_read(data)
-                client_socket.sendall(json.dumps(response).encode())
+                self._handle_read(data, client_socket)
+                ##response = self._handle_read(data)
+                ##client_socket.sendall(json.dumps(response).encode())
+
             elif data["type"] == "commit":
                 self._handle_commit_request(data, client_socket)
             elif data["type"] == "abort":
@@ -78,16 +72,19 @@ class ReplicationServer:
             )
         except Exception as e:
             print(f"Error handling request: {e}")
-        finally:
-            client_socket.close()
+        ##finally:
+        ##    if not client_socket._closed:
+        ##        client_socket.close()
 
-    def _handle_read(self, data: Dict) -> Dict:
+    def _handle_read(self, data: Dict, client_socket: socket.socket):
         key = data["item"]
         result = self.database.read(key)
         if result:
             value, version = result
-            return {"status": "success", "value": value, "version": version}
-        return {"status": "error", "message": "Key not found"}
+            response = {"status": "success", "value": value, "version": version}
+        else:
+            response = {"status": "success", "value": None, "version": 0}
+        client_socket.sendall(json.dumps(response).encode())
 
     def _handle_commit_request(self, data: Dict, client_socket: socket.socket):
         transaction_id = data["transaction_id"]
@@ -116,7 +113,6 @@ class ReplicationServer:
         else:
             response = {"status": "aborted"}
 
-        # Send the response back to the client
         with self.lock:
             client_socket = self.pending_commits.pop(transaction_id, None)
         if client_socket:
@@ -124,20 +120,21 @@ class ReplicationServer:
                 client_socket.sendall(json.dumps(response).encode())
             except Exception as e:
                 print(f"Error sending response to client: {e}")
-            finally:
-                client_socket.close()
+            ##finally:
+            ##client_socket.close()
 
     def certify_transaction(
-        self, rs: List[Tuple[str, int]], ws: List[Tuple[str, any]]
+        self, rs: List[Tuple[str, int]], ws: List[Tuple[str, Any]]
     ) -> bool:
         with self.lock:
             for item, version in rs:
                 current = self.database.read(item)
-                if current and current[1] != version:
+                current_version = current[1] if current else 0
+                if current_version != version:
                     return False
-        return True
+            return True
 
-    def apply_transaction(self, ws: List[Tuple[str, any]]):
+    def apply_transaction(self, ws: List[Tuple[str, Any]]):
         with self.lock:
             for key, value in ws:
                 current = self.database.read(key)
@@ -148,4 +145,4 @@ class ReplicationServer:
         if self.server_socket:
             self.server_socket.close()
             self.server_socket = None
-            print("Replication Server stopped.")
+            print(f"Replication Server {self.node_id} foi parado.")

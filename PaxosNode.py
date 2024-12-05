@@ -19,13 +19,12 @@ class PaxosNode:
         self.lock = threading.Lock()
 
         self.proposals = {}
-        self.accepted_proposals = {}
+        ##self.accepted_proposals = {}
+
         self.promised_id = None
         self.accepted_id = None
         self.accepted_value = None
-
         self.message_queue = PriorityQueue()
-
         self._promise_count = {}
         self._accept_count = {}
         self._proposal_counter = 0
@@ -39,6 +38,7 @@ class PaxosNode:
         proposal_id = self._generate_proposal_id()
         with self.lock:
             self.proposals[proposal_id] = message
+        # Send prepare message to all nodes
         self._send_to_all(
             {"type": "prepare", "proposal_id": proposal_id, "node_id": self.node_id}
         )
@@ -57,7 +57,7 @@ class PaxosNode:
                 }
                 self._send_message(address, response)
 
-    def _handle_promise(self, data: Dict):
+    def _handle_promise(self, data: Dict, address: Tuple[str, int]):
         proposal_id = data["proposal_id"]
 
         with self.lock:
@@ -86,7 +86,7 @@ class PaxosNode:
                 response = {"type": "accepted", "proposal_id": proposal_id}
                 self._send_message(address, response)
 
-    def _handle_accepted(self, data: Dict):
+    def _handle_accepted(self, data: Dict, address: Tuple[str, int]):
         proposal_id = data["proposal_id"]
 
         with self.lock:
