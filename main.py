@@ -1,55 +1,87 @@
 import threading
+import time
+from typing import List, Tuple
 from ReplicationServer import ReplicationServer
 from TransactionClient import TransactionClient
-import time
 
 
-def start_server(node_id, host, port, paxos_port, server_addresses):
-    server = ReplicationServer(host, port, node_id, server_addresses, paxos_port)
-    server.start()
+def main():
+    # Define server addresses for Paxos (only one server in this test)
+    server_paxos_port = 11000
+    server_client_port = 10000
+    server_addresses: List[Tuple[str, int]] = [("localhost", server_paxos_port)]
 
+    # Initialize and start the ReplicationServer
+    print("Initializing ReplicationServer...")
+    server = ReplicationServer(
+        host="localhost",
+        port=server_client_port,
+        node_id=1,
+        server_addresses=server_addresses,
+        paxos_port=server_paxos_port,
+    )
+    server_thread = threading.Thread(
+        target=server.start, daemon=True, name="ReplicationServer-1"
+    )
+    server_thread.start()
+    print("ReplicationServer started and listening for connections.")
 
-def client_thread(server_address):
-    client = TransactionClient(server_address)
+    # Allow the server some time to start
+    time.sleep(2)
+
+    # Initialize the TransactionClient
+    print("\nInitializing TransactionClient...")
+    client = TransactionClient(server_address=("localhost", server_client_port))
+    print("TransactionClient connected to ReplicationServer.")
+
+    # Start a new transaction
+    print("\nStarting a new transaction...")
     client.start_transaction()
-    # Simulate transaction operations
-    value = client.read("x")
-    print(f"Client read x: {value}")
-    client.write("x", "new_value")
-    if client.commit():
-        print("Transaction committed")
-    else:
-        print("Transaction aborted")
+    print(f"Transaction started with ID: {client.transaction_id}")
+
+    # Perform write operations
+    print("\nPerforming write operations...")
+    client.write("x", 10)
+    print("Wrote key 'x' with value 10.")
+    client.write("y", 20)
+    print("Wrote key 'y' with value 20.")
+
+    # Commit the transaction
+    print("\nCommitting the transaction...")
+    try:
+        commit_success = client.commit()
+        print(f"Commit successful: {commit_success}")
+    except Exception as e:
+        print(f"Commit failed: {e}")
+
+    # Start another transaction to read the values
+    print("\nStarting a new transaction for reading...")
+    client.start_transaction()
+    print(f"Transaction started with ID: {client.transaction_id}")
+
+    # Perform read operations
+    print("\nPerforming read operations...")
+    try:
+        value_x = client.read("x")
+        print(f"Read key 'x': {value_x}")
+        value_y = client.read("y")
+        print(f"Read key 'y': {value_y}")
+    except Exception as e:
+        print(f"Read failed: {e}")
+
+    # Close the client connection
+    print("\nClosing TransactionClient connection...")
     client.close()
+    print("TransactionClient connection closed.")
+
+    # Allow some time for all logs to be printed before shutting down
+    time.sleep(2)
+
+    # Stop the ReplicationServer
+    print("\nStopping ReplicationServer...")
+    server.stop()
+    print("ReplicationServer stopped.")
 
 
 if __name__ == "__main__":
-    # Define server addresses
-    server_addresses = [
-        ("localhost", 10000),  # Server 0
-        ("localhost", 10001),  # Server 1
-        ("localhost", 10002),  # Server 2
-    ]
-    paxos_ports = [20000, 20001, 20002]
-
-    # Start servers
-    for i in range(len(server_addresses)):
-        host, port = server_addresses[i]
-        paxos_port = paxos_ports[i]
-        threading.Thread(
-            target=start_server,
-            args=(
-                i,
-                host,
-                port,
-                paxos_port,
-                list(zip([addr[0] for addr in server_addresses], paxos_ports)),
-            ),
-            daemon=True,
-        ).start()
-
-    # Wait for servers to start
-    time.sleep(2)
-
-    # Start client
-    threading.Thread(target=client_thread, args=(server_addresses[0],)).start()
+    main()
