@@ -4,19 +4,6 @@ import threading
 import logging
 from typing import Dict, Tuple, List, Any
 from PaxosNode import PaxosNode
-from KeyValueStore import KeyValueStore
-
-logger = logging.getLogger("ReplicationServer")
-logger.setLevel(logging.DEBUG)
-ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)
-ch.setFormatter(
-    logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(threadName)s - %(message)s"
-    )
-)
-if not logger.handlers:
-    logger.addHandler(ch)
 
 
 class ReplicationServer:
@@ -33,7 +20,7 @@ class ReplicationServer:
         self.node_id = node_id
         self.server_addresses = server_addresses
         self.paxos_port = paxos_port
-        self.database = KeyValueStore()
+        self.database = {}
         self.lock = threading.Lock()
         self.pending_commits: Dict[str, socket.socket] = {}
         self.paxos_node = PaxosNode(node_id, server_addresses, paxos_port)
@@ -60,9 +47,8 @@ class ReplicationServer:
                         daemon=True,
                     ).start()
                 except Exception as e:
-                    logger.error(f"Error accepting connections: {e}")
+                    print(e)
         except Exception as e:
-            logger.error(f"Error starting server: {e}")
             self.stop()
 
     def handle_request(self, client_socket: socket.socket):
@@ -99,7 +85,7 @@ class ReplicationServer:
 
     def _handle_read(self, data: Dict, client_socket: socket.socket):
         key = data.get("item")
-        result = self.database.read(key)
+        result = self.database.get(key)
         if result:
             value, version = result
             response = {"status": "success", "value": value, "version": version}
@@ -180,7 +166,7 @@ class ReplicationServer:
     ) -> bool:
         with self.lock:
             for item, version in rs:
-                current = self.database.read(item)
+                current = self.database.get(item)
                 current_version = current[1] if current else 0
                 if current_version != version:
                     return False
@@ -189,9 +175,9 @@ class ReplicationServer:
     def apply_transaction(self, ws: List[Tuple[str, Any]]):
         with self.lock:
             for key, value in ws:
-                current = self.database.read(key)
+                current = self.database.get(key)
                 version = current[1] + 1 if current else 1
-                self.database.write(key, value, version)
+                self.database.update(key, (value, version))
 
     def _send_response(
         self,

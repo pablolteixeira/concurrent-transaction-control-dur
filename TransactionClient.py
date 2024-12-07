@@ -10,7 +10,7 @@ class TransactionClient:
         self.server_address = server_address
         self.transaction_id = None
         self.rs = []
-        self.ws = []
+        self.ws = {}
         self.socket = None
         self._connect_to_server()
 
@@ -20,6 +20,7 @@ class TransactionClient:
         self.socket.settimeout(15)
 
     def start_transaction(self):
+        ##talvez sequencial
         self.transaction_id = str(uuid.uuid4())
         self.rs.clear()
         self.ws.clear()
