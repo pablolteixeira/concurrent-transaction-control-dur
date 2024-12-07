@@ -4,25 +4,13 @@ import uuid
 import logging
 from typing import Any, Dict, Tuple
 
-logger = logging.getLogger("TransactionClient")
-logger.setLevel(logging.DEBUG)
-ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)
-ch.setFormatter(
-    logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(threadName)s - %(message)s"
-    )
-)
-if not logger.handlers:
-    logger.addHandler(ch)
-
 
 class TransactionClient:
     def __init__(self, server_address: Tuple[str, int]):
         self.server_address = server_address
         self.transaction_id = None
         self.rs = []
-        self.ws = {}
+        self.ws = []
         self.socket = None
         self._connect_to_server()
 
@@ -39,12 +27,14 @@ class TransactionClient:
     def read(self, item: str, version: int = None) -> Any:
         if item in self.ws:
             return self.ws[item]
+
         request = {
             "type": "read",
             "transaction_id": self.transaction_id,
             "item": item,
             "version": version,
         }
+
         self._send_request_to_server(request)
         response = self._receive_response_from_server()
         value = response.get("value")
@@ -60,7 +50,7 @@ class TransactionClient:
             "type": "commit",
             "transaction_id": self.transaction_id,
             "rs": self.rs,
-            "ws": list(self.ws.items()),
+            "ws": self.ws,
         }
         self._send_request_to_server(request)
         response = self._receive_response_from_server()
