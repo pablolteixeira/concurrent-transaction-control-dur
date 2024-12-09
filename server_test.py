@@ -63,17 +63,32 @@ def test_commit_request_abort():
     # Teste de solicitação de commit abortado
     ## Entrada esperada:
     - Um conjunto de leitura inconsistente com o estado atual do banco de dados.
+    - O valor de 'chave1' é manualmente configurado para causar conflito.
     ## Comportamento esperado:
     - O servidor falha no teste de certificação e retorna abort.
     ## Saída esperada:
     - Resposta no formato {"type": "commit_response", "result": "abort"}.
     """
-    message = {
+
+    # Passo 1: Definir manualmente o valor no banco de dados
+    setup_message = {
         "type": "commit_request",
-        "rs": {"chave1": ("valor1", 10)},
+        "rs": {},  # Nenhum conjunto de leitura, apenas escrita para setup
+        "ws": {"chave1": "valor_atualizado"},
+    }
+    setup_response = send_message("localhost", 8001, setup_message)
+    assert setup_response["type"] == "commit_response", "Erro no setup inicial"
+    assert setup_response["result"] == "commit", "Setup falhou inesperadamente"
+
+    # Passo 2: Iniciar o teste com um conjunto de leitura inconsistente
+    test_message = {
+        "type": "commit_request",
+        "rs": {"chave1": ("valor1", 1)},  # Valor e versão desatualizados
         "ws": {"chave3": "valor3"},
     }
-    response = send_message("localhost", 8001, message)
+    response = send_message("localhost", 8001, test_message)
+
+    # Passo 3: Validar resposta de abort
     assert response["type"] == "commit_response", "Resposta incorreta do servidor"
     assert response["result"] == "abort", "Abort esperado, mas commit ocorreu"
     print("Teste de solicitação de commit abortado passou!")
@@ -118,7 +133,7 @@ def main():
     # Executa os testes
     test_read_operation()
     test_commit_request_success()
-    ##test_commit_request_abort()
+    test_commit_request_abort()
     test_paxos_consensus()
 
 
