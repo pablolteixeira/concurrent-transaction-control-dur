@@ -6,75 +6,82 @@ from Transaction import Transaction
 
 import argparse
 
+
 class Client:
     def __init__(self, cid: int, servers: List[Tuple[str, int]]):
         self.cid = cid
         self.tid = 0
         self.current_server = None
         self.servers = servers
-    
+
     def begin_transaction(self) -> Transaction:
-        print(f"Client ID[{self.cid}] -> Beginning transaction!")
+        print(f"Cliente ID[{self.cid}] -> Iniciando transação!")
         self.tid += 1
         self.current_server = random.choice(self.servers)
-        print(f"Client ID[{self.cid}] -> Choosen server: {self.current_server[0]}:{self.current_server[1]}.")
+        print(
+            f"Cliente ID[{self.cid}] -> Servidor escolhido: {self.current_server[0]}:{self.current_server[1]}."
+        )
         return Transaction(self.cid, self.tid)
-    
-    def read(self, transaction: Transaction, key: str) -> Any:
-        print(f"Client ID[{self.cid}] -> Read Operation: {key}")
-        # Check write set first
-        if key in transaction.ws:
-            print(f"Client ID[{self.cid}] -> Key '{key}' found in client ws. Value is '{transaction.ws[key]}'")
-            return transaction.ws[key]
-        print(f"Client ID[{self.cid}] -> Key '{key}' not found in client ws.")
 
-        # Read from server
+    def read(self, transaction: Transaction, key: str) -> Any:
+        print(f"Cliente ID[{self.cid}] -> Operação de leitura: {key}")
+        # Verifica o conjunto de escrita primeiro
+        if key in transaction.ws:
+            print(
+                f"Cliente ID[{self.cid}] -> Chave '{key}' encontrada no conjunto de escrita do cliente. Valor é '{transaction.ws[key]}'"
+            )
+            return transaction.ws[key]
+        print(
+            f"Cliente ID[{self.cid}] -> Chave '{key}' não encontrada no conjunto de escrita do cliente."
+        )
+
+        # Lê do servidor
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.connect(self.current_server)
-        
-        request = {
-            "type": "read",
-            "item": key,
-            "cid": self.cid,
-            "tid": transaction.tid
-        }
-        
-        print(f"Client ID[{self.cid}] -> Sending request to the choosen server to search for key '{key}' value.")
+
+        request = {"type": "read", "item": key, "cid": self.cid, "tid": transaction.tid}
+
+        print(
+            f"Cliente ID[{self.cid}] -> Enviando requisição ao servidor escolhido para buscar o valor da chave '{key}'."
+        )
         server_socket.send(json.dumps(request).encode())
         response = json.loads(server_socket.recv(4096).decode())
-        print(f"Client ID[{self.cid}] -> Response received: {response}")
+        print(f"Cliente ID[{self.cid}] -> Resposta recebida: {response}")
         server_socket.close()
-        
+
         value, version = response["value"], response["version"]
         transaction.rs[key] = (value, version)
         return value
-    
+
     def write(self, transaction: Transaction, key: str, value: Any):
-        print(f"Client ID[{self.cid}] -> Write Operation: {key} = {value}")
+        print(f"Cliente ID[{self.cid}] -> Operação de escrita: {key} = {value}")
         transaction.ws[key] = value
-    
+
     def commit(self, transaction: Transaction) -> bool:
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.connect(self.current_server)
-        
+
         request = {
             "type": "commit_request",
             "cid": self.cid,
             "tid": transaction.tid,
             "rs": transaction.rs,
-            "ws": transaction.ws
+            "ws": transaction.ws,
         }
-        print(f"Client ID[{self.cid}] -> Commit request sent: {request}")
+        print(f"Cliente ID[{self.cid}] -> Requisição de commit enviada: {request}")
         server_socket.send(json.dumps(request).encode())
         response = json.loads(server_socket.recv(4096).decode())
         server_socket.close()
-        
-        print(f"Client ID[{self.cid}] -> Commit result! {response['result'] == 'commit'}")
+
+        print(
+            f"Cliente ID[{self.cid}] -> Resultado do commit! {response['result'] == 'commit'}"
+        )
         return response["result"] == "commit"
-    
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-c', '--client-id', type=int, help="id of the client")
+    parser.add_argument("-c", "--client-id", type=int, help="id do cliente")
 
     args = parser.parse_args()
 
@@ -83,9 +90,9 @@ if __name__ == "__main__":
 
         with open("servers_config.json") as f:
             server_config = json.load(f)
-        
+
         servers = [tuple(server_config[id]) for id in server_config]
 
         client = Client(client_id, servers)
     else:
-        print("Server ID must be declared! Use --help to know more.")
+        print("O ID do cliente deve ser declarado! Use --help para saber mais.")
