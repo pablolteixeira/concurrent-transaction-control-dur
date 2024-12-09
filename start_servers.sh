@@ -43,7 +43,7 @@ start_server() {
             ;;
     esac
     
-    #sleep 1  # Wait a bit between server starts to avoid port conflicts
+    sleep 0.1  # Wait a bit between server starts to avoid port conflicts
 }
 
 echo "Starting servers using $TERMINAL..."
